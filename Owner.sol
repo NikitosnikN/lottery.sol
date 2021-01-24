@@ -7,7 +7,7 @@ contract Ownable {
 
     event OwnerTransfered(address owner);
 
-    constructor () internal {
+    constructor () {
         _owner = msg.sender;
         emit OwnerTransfered(msg.sender);
     }

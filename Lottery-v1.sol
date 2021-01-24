@@ -69,6 +69,8 @@ contract Lottery is Ownable {
 
 
     function bet() public {
+        require(isRoundActive(), "Round must be active");
+        
         emit BetPlaced(msg.sender, _betAmount);
 
         _prizeFund.add(_betAmount);
@@ -83,7 +85,7 @@ contract Lottery is Ownable {
         require(_prizeFund > 0, "Prize fund is empty");
         require(_lastInvestorAddress == msg.sender, "You must be last investor");
 
-        emit BetPlaced(msg.sender, _prizeFund);
+        emit PrizeWasTaken(msg.sender, _prizeFund);
 
         _prizeFund = 0;
         _lastInvestedTime = 0;
