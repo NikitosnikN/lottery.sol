@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.7.4;
+pragma solidity ^0.8.0;
 
 
 library SafeMath {
@@ -11,6 +11,16 @@ library SafeMath {
     }
 }
 
+interface InterfaceERC20 {
+    function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function transferFrom(address sender, address recipient, uint256 amount) external;
+}
+
+/**
+ * @dev From OpenZeppelin contracts 
+ * https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/Ownable.sol
+ */
 contract Ownable {
     address internal _owner;
 
@@ -43,18 +53,40 @@ contract Ownable {
 
 }
 
+/**
+ * @dev Lottery contract.
+ * 
+ * Reusable, time depending lottery.
+ * 
+ * Mechanics: 
+ * Round starts after close time was set. Lottery has common prize fund, which will be taken 
+ * by last participant of the lottery. After any bet will be made current round close time will be 
+ * delayed by some time (it is a dynamic parameter). Bet amount is fixed parameter, so any participant 
+ * will bet the same amount of tokens. 
+ * Next round cannot be started until prize fund of last round is not withdrawed. 
+ * 
+ * Dynamic parameters: 
+ *      - token contract (balanceOf, allowance, transferFrom methods must be implemented)
+ *      - bet amount
+ *      - bet time (current round close time) delay
+ *      - next round close time
+ */
 contract Lottery is Ownable {
     using SafeMath for uint256;
 
     string public name = "Lottery";
-    string public symbol = "Symbol";
+    string public symbol = "LTTR";
 
-    address internal _lastInvestorAddress;
-    uint256 internal _lastInvestedTime;
+    InterfaceERC20 _tokenContract;
 
-    uint256 internal _betAmount;
-    uint256 internal _roundCloseTime;
-    uint256 internal _prizeFund;
+    address public lastInvestorAddress;
+    uint256 public lastInvestedTime; // timestamp (secs)
+
+    uint256 public betAmount; 
+    uint256 public prizeFund;
+
+    uint256 public roundCloseTime;  // timestamp (secs)
+    uint256 public betTimeDelay;  // relative time (secs)
 
 
     event BetPlaced(address player, uint256 bet);
@@ -62,64 +94,72 @@ contract Lottery is Ownable {
     event NewRoundStarted(uint256 time, uint256 bet);
 
 
-    constructor() Ownable() {
-        _betAmount = 10 * 1e6;
-        _roundCloseTime = block.timestamp;
+    constructor(address tokenAddress) Ownable() {
+        _tokenContract = InterfaceERC20(tokenAddress);
+        betAmount = 10 * 1e6;
+        roundCloseTime = 0;
+        betTimeDelay = 5 minutes;
     }
 
 
+    /**
+     * @dev Make a bet and transfer tokens to this contract. Bet will go to common prize fund. 
+     */
     function bet() public {
         require(isRoundActive(), "Round must be active");
-        
-        emit BetPlaced(msg.sender, _betAmount);
+        require(_tokenContract.balanceOf(msg.sender) >= betAmount, "Sender has not enough balance");
+        require(_tokenContract.allowance(msg.sender, address(this)) >= betAmount, "Lottery contract is not allowed to transfer tokens");
 
-        _prizeFund.add(_betAmount);
-        _lastInvestedTime = block.timestamp;
-        _lastInvestorAddress = msg.sender;
+        emit BetPlaced(msg.sender, betAmount);
+
+        _tokenContract.transferFrom(msg.sender, address(this), betAmount);
+
+        prizeFund = prizeFund.add(betAmount);
+        lastInvestedTime = block.timestamp;
+        lastInvestorAddress = msg.sender;
+        roundCloseTime = roundCloseTime + betTimeDelay;
+
     }
 
-
-
-    function getPrize() public {
+    /**
+     * @dev Send prize fund to the winner. Clears up info about last round.
+     */
+    function sendPrizeToWinner() public {
         require(!isRoundActive(), "Round must be finished");
-        require(_prizeFund > 0, "Prize fund is empty");
-        require(_lastInvestorAddress == msg.sender, "You must be last investor");
+        require(prizeFund > 0, "Prize fund is empty");
 
-        emit PrizeWasTaken(msg.sender, _prizeFund);
+        emit PrizeWasTaken(lastInvestorAddress, prizeFund);
 
-        _prizeFund = 0;
-        _lastInvestedTime = 0;
-        _lastInvestorAddress = address(0);
+        _tokenContract.transferFrom(address(this), lastInvestorAddress, prizeFund);
+
+        prizeFund = 0;
+        lastInvestedTime = 0;
+        lastInvestorAddress = address(0);
         
     }
 
-    function startNewRound(uint256 newRoundCloseTime, uint256 newBet) public onlyOwner {
+    /**
+     * @dev Set up parameters for new round and start it. Only for owner 
+     */
+    function startNewRound(uint256 newRoundCloseTime, uint256 newBetTimeDelay, uint256 newBetAmount) public onlyOwner {
         require(!isRoundActive(), "Round must be finished");
-        require(_prizeFund > 0, "Prize fund must be empty first");
+        require(prizeFund == 0, "Prize fund must be empty first");
         require(newRoundCloseTime > block.timestamp, "Close time must be greater than now");
-        require(newBet >= 1 * 1e6, "Bet must be greater or equal than 1 * 1e6");
+        require(newBetAmount >= 1 * 1e6, "Bet must be greater or equal than 1 * 1e6");
+        require(newBetTimeDelay >= 60, "Time delay must be greater than 1 minute");
 
-        emit NewRoundStarted(block.timestamp, newBet);
+        emit NewRoundStarted(block.timestamp, newBetAmount);
 
-        _roundCloseTime = newRoundCloseTime;
-        _betAmount = newBet;
+        roundCloseTime = newRoundCloseTime;
+        betAmount = newBetAmount;
+        betTimeDelay = newBetTimeDelay;
     }
 
-
-    function lastInvestedTime() public view returns(uint256) {
-        return _lastInvestedTime;
-    }
-
-    function prizeFund() public view returns(uint256) {
-        return _prizeFund;
-    }
-
-    function roundCloseTime() public view returns(uint256) {
-        return _roundCloseTime;
-    }
-
+    /**
+     * @dev Returns lottery status - is it active or not
+     */
     function isRoundActive() public view returns(bool) {
-        return block.timestamp >= _roundCloseTime;
+        return block.timestamp <= roundCloseTime;
     }
 
 }
